@@ -1,0 +1,12 @@
+{
+	"autodeskProduct":	"Fusion",
+	"type":	"script",
+	"author":	"Abhisheksinh Vanrajsinh Rathod",
+	"description":	{
+		"":	"A parametric F1 design aimed to be fully functional"
+	},
+	"version":	"",
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true,
+	"iconFilename":	"ScriptIcon.svg"
+}
