@@ -39,11 +39,18 @@
 #   SweepFeatures.createInput(profile, path, operation)               [confirmed]
 #   MoveFeatures.add() throws on a ZERO transform -> avoided here     [confirmed]
 #
+# PARAMETRIC-MODE LESSONS (learned from real 2702 runtime errors):
+#   - PipeFeatureInput.sectionSize needs a REAL ValueInput (cm); a string
+#     expression throws "Value does not contain a real". Live link is set after
+#     creation via the feature's sectionSize ModelParameter .expression.
+#   - Construction axes/points from RAW geometry (InfiniteLine3D / Point3D) are
+#     rejected in parametric mode ("Environment is not supported"). Revolve and
+#     Move>Rotate axes are therefore SKETCH LINES (entity-based), which work.
+#
 # STILL "# VERIFY" (stable/long-standing, but not re-fetched this pass; confirm
 # if a line throws): addDistanceDimension orientation enum, addFillet,
 # sketchEllipses.add, sketchFittedSplines.add + isClosed, addByThreePoints,
-# revolve setAngleExtent, constructionAxes.setByLine + InfiniteLine3D,
-# mirrorFeatures.createInput, FeatureHealthStates enum, PipeSectionTypes member.
+# revolve setAngleExtent, mirrorFeatures.createInput, FeatureHealthStates enum.
 ####################################################################################
 
 import math
@@ -389,21 +396,22 @@ def _build_pylon_path(comp, params):
     return comp.features.createPath(a, True)          # confirmed
 
 
-def _pipe_tube(comp, occ, path, diameter_expr, operation):
-    """Native round Pipe of diameter_expr along `path`. Returns the feature.
+def _pipe_tube(comp, occ, path, diameter_cm, diameter_expr, operation):
+    """Native round Pipe along `path`. Returns the feature.
 
-    Replaces the old manual profile+sweep -- removes the perpendicular-plane and
-    profile-circle steps that were the silent-failure source. Sets a LIVE
-    diameter by editing the feature's sectionSize ModelParameter expression
-    after creation (confirmed: PipeFeature dims are ModelParameters).
+    Replaces the old manual profile+sweep. sectionSize MUST be seeded with a
+    REAL ValueInput (cm) -- PipeFeatures.add() reads it as a real and a string
+    ValueInput throws "Value does not contain a real". The live link to the
+    parameter is set AFTER creation via the feature's sectionSize ModelParameter.
     """
     pipes = comp.features.pipeFeatures              # confirmed
     pin = pipes.createInput(path, operation)        # confirmed: createInput(path, operation)
     pin.isHollow = False                            # confirmed property
     # NOTE: circular is the DEFAULT section, so we deliberately do NOT set
     # sectionType (avoids any PipeSectionTypes enum-name risk on 2702).
-    # Seed an initial size (ValueInput); the live link is set post-add below.
-    pin.sectionSize = adsk.core.ValueInput.createByString(diameter_expr)  # confirmed property
+    # sectionSize needs a REAL (cm), NOT a string expression (confirmed by the
+    # "Value does not contain a real" failure on 2702).
+    pin.sectionSize = adsk.core.ValueInput.createByReal(diameter_cm)  # real cm value
 
     # REQUIRED when the path is in a non-root component (our halo occurrence),
     # or the pipe geometry can transform to the wrong place / misbuild silently.
@@ -438,10 +446,13 @@ def create_halo(root_comp, params, design, mono):
     occ = root_comp.occurrences.addNewComponent(adsk.core.Matrix3D.create())
     comp = occ.component; comp.name = "Halo"
     NB = adsk.fusion.FeatureOperations.NewBodyFeatureOperation
+    dia_cm = _get_param_value(params, "halo_tube_diameter", 10.0)  # cm (real seed)
 
-    hoop = _pipe_tube(comp, occ, _build_hoop_path(comp, params), "halo_tube_diameter", NB).bodies.item(0)
+    hoop = _pipe_tube(comp, occ, _build_hoop_path(comp, params),
+                      dia_cm, "halo_tube_diameter", NB).bodies.item(0)
     hoop.name = "Halo_hoop"
-    pylon = _pipe_tube(comp, occ, _build_pylon_path(comp, params), "halo_tube_diameter", NB).bodies.item(0)
+    pylon = _pipe_tube(comp, occ, _build_pylon_path(comp, params),
+                       dia_cm, "halo_tube_diameter", NB).bodies.item(0)
     pylon.name = "Halo_pylon"
 
     tools = adsk.core.ObjectCollection.create(); tools.add(pylon)
@@ -526,30 +537,50 @@ LIVE_ANGLES = True
 _INCIDENCE_SKIPS = []
 
 
-def _apply_incidence(comp, body, qc_world_pt, angle_expr, axis_name):
-    """Rotate `body` about a spanwise (+Y) axis through `qc_world_pt` by
-    `angle_expr` (a parameter expression) -> LIVE angle of attack.
+def _make_y_axis_line(comp, x_cm, z_cm, tag):
+    """Return a SketchLine parallel to world +Y, passing through (x_cm, *, z_cm).
 
-    Uses the current Move API (createInput2 + defineAsRotate; the old
-    createInput is retired). A string ValueInput binds the rotation to the
-    expression, so dragging the angle parameter re-tilts the wing. Guarded:
-    on any failure the element is left flat and the skip is recorded rather
-    than aborting the wing. Sign follows the right-hand rule about +Y; if a
-    wing tilts the wrong way, negate the angle parameter.
+    Built as a construction line on an XY-offset plane (offset = z_cm). Both the
+    plane (setByOffset of a real plane) and the sketch line are entity-based, so
+    this works in PARAMETRIC mode -- unlike a construction axis from a raw
+    InfiniteLine3D, which Fusion rejects with "Environment is not supported".
+    """
+    planes = comp.constructionPlanes
+    pin = planes.createInput()
+    pin.setByOffset(comp.xYConstructionPlane, adsk.core.ValueInput.createByReal(z_cm))
+    pl = planes.add(pin); pl.name = "AoA_plane_" + tag
+    sk = comp.sketches.add(pl); sk.name = "AoA_axis_" + tag
+    P = adsk.core.Point3D.create
+    # On an XY-offset plane, sketch (u,v) -> world (u, v, z_cm). A line at u=x_cm
+    # spanning v is therefore parallel to world Y at (x_cm, *, z_cm).
+    ln = sk.sketchCurves.sketchLines.addByTwoPoints(P(x_cm, -50.0, 0), P(x_cm, 50.0, 0))
+    try:
+        ln.isConstruction = True
+    except Exception:
+        pass
+    return ln
+
+
+def _apply_incidence(comp, body, qc_x, qc_z, angle_expr, axis_name):
+    """Rotate `body` about a spanwise (+Y) axis through (qc_x, *, qc_z) by
+    `angle_expr` -> LIVE angle of attack.
+
+    Axis is a SketchLine (parametric-safe), NOT a construction axis from a raw
+    InfiniteLine3D (which fails in parametric mode). Uses the current Move API
+    (createInput2 + defineAsRotate; old createInput is retired). Guarded: on any
+    failure the element is left flat and the skip is recorded rather than
+    aborting the wing. Sign follows the right-hand rule about +Y; if a wing
+    tilts the wrong way, negate the angle parameter.
     """
     if not LIVE_ANGLES:
         return False
     try:
-        axes = comp.constructionAxes
-        ai = axes.createInput()
-        line = adsk.core.InfiniteLine3D.create(qc_world_pt, adsk.core.Vector3D.create(0, 1, 0))
-        ai.setByLine(line)                      # confirmed pattern (same as wheel axis)
-        axis = axes.add(ai); axis.name = axis_name
+        axis_line = _make_y_axis_line(comp, qc_x, qc_z, axis_name)
         ents = adsk.core.ObjectCollection.create(); ents.add(body)
         mf = comp.features.moveFeatures
         mi = mf.createInput2(ents)              # confirmed: createInput is retired -> createInput2
-        ok = mi.defineAsRotate(axis, adsk.core.ValueInput.createByString(angle_expr))  # confirmed
-        if not ok:
+        ok = mi.defineAsRotate(axis_line, adsk.core.ValueInput.createByString(angle_expr))  # confirmed
+        if ok is False:
             raise RuntimeError("defineAsRotate returned False")
         feat = mf.add(mi)
         if _err(feat):
@@ -592,8 +623,7 @@ def create_rear_wing(root_comp, params, design, mono, engine_cover):
         raise RuntimeError("RW mainplane: %s" % mp.errorOrWarningMessage)
     mp_body = mp.bodies.item(0); mp_body.name = "RW_mainplane"
     # LIVE AoA: tilt the mainplane about its quarter-chord spanwise (Y) axis.
-    P3 = adsk.core.Point3D.create
-    _apply_incidence(comp, mp_body, P3(x_wing + 0.25 * cr, 0, z_wing),
+    _apply_incidence(comp, mp_body, x_wing + 0.25 * cr, z_wing,
                      "rw_mainplane_angle", "RW_mp_AoA")
 
     gx = _get_param_value(params, "drs_slot_gap_x", 2.0); gz = _get_param_value(params, "drs_slot_gap_z", 3.5)
@@ -609,7 +639,7 @@ def create_rear_wing(root_comp, params, design, mono, engine_cover):
         raise RuntimeError("RW flap: %s" % fl.errorOrWarningMessage)
     fl_body = fl.bodies.item(0); fl_body.name = "RW_flap"
     # LIVE DRS: tilt the flap about its own quarter-chord spanwise axis.
-    _apply_incidence(comp, fl_body, P3(fr_o.x + 0.25 * cr * 0.55, 0, fr_o.y),
+    _apply_incidence(comp, fl_body, fr_o.x + 0.25 * cr * 0.55, fr_o.y,
                      "drs_flap_angle", "RW_flap_AoA")
 
     # FULL SPAN: the loft above only spans 0..+span/2. Mirror the mainplane +
@@ -665,7 +695,7 @@ def create_front_wing(root_comp, params, design, mono, airfoil_section_fn):
     # LIVE AoA: tilt the main plane about its quarter-chord spanwise (Y) axis.
     # Done BEFORE the wing mirror so the mirrored (right) side inherits the tilt.
     _apply_incidence(comp, main_body,
-                     P(x_off + 0.25 * chord_main, 0, z_off), "fw_mainplane_angle", "FW_mp_AoA")
+                     x_off + 0.25 * chord_main, z_off, "fw_mainplane_angle", "FW_mp_AoA")
     flap_features = []; flap_bodies = []; prev_te = main_af["te_point"]
     for i in range(1, 4):
         flap_le_x = prev_te.x + gap_x
@@ -674,7 +704,7 @@ def create_front_wing(root_comp, params, design, mono, airfoil_section_fn):
         fb = ext_i.bodies.item(0); fb.name = "FW_flap_%d" % i
         # Cumulative AoA: main plane angle + i flap steps (positions stay frozen).
         _apply_incidence(comp, fb,
-                         P(flap_le_x + 0.25 * chord_flap, 0, flap_le_z),
+                         flap_le_x + 0.25 * chord_flap, flap_le_z,
                          "fw_mainplane_angle + %d*fw_flap_angle_step" % i, "FW_flap%d_AoA" % i)
         flap_features.append((ext_i, af_i)); flap_bodies.append(fb); prev_te = af_i["te_point"]
 
@@ -738,14 +768,20 @@ def _build_one_wheel(comp):
     d_rim.parameter.expression = "wheel_rim_diameter/2"
     d_out.parameter.expression = "tyre_outer_diameter/2"
     d_wid.parameter.expression = "tyre_width"
+    # Revolve axis as a SKETCH construction LINE along Y at X=0 (parametric-safe).
+    # A construction axis from a raw InfiniteLine3D is rejected in parametric mode
+    # ("Environment is not supported"); a sketch line is an entity, so it works.
+    # The profile sits at X=r_rim..r_out (positive X), so it never crosses this
+    # axis. Construction => it adds no profile region. Added BEFORE capturing the
+    # profile so adding a curve can't invalidate the profile reference.
+    axis_line = lines.addByTwoPoints(P(0, -half_w * 3.0, 0), P(0, half_w * 3.0, 0))
+    try:
+        axis_line.isConstruction = True
+    except Exception:
+        pass
     profile = sk.profiles.item(0)
-    axes = comp.constructionAxes
-    ai = axes.createInput()
-    y_line = adsk.core.InfiniteLine3D.create(P(0, 0, 0), adsk.core.Vector3D.create(0, 1, 0))  # VERIFY
-    ai.setByLine(y_line)  # VERIFY
-    wheel_axis = axes.add(ai); wheel_axis.name = "Wheel_axis"
     revolves = comp.features.revolveFeatures
-    ri = revolves.createInput(profile, wheel_axis, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    ri = revolves.createInput(profile, axis_line, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
     ri.setAngleExtent(False, adsk.core.ValueInput.createByString("360 deg"))  # VERIFY
     wheel = revolves.add(ri)
     if _err(wheel):
@@ -758,11 +794,6 @@ def create_wheels(root_comp, params, design, mono):
     parent_occ = root_comp.occurrences.addNewComponent(adsk.core.Matrix3D.create())
     parent = parent_occ.component; parent.name = "Wheels"
 
-    # Build the master wheel ONCE, centred at origin, spinning about Y.
-    master_occ = parent.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-    master = master_occ.component; master.name = "Wheel_master"
-    _build_one_wheel(master)
-
     wb  = _get_param_value(params, "wheelbase", 360.0)
     ft  = _get_param_value(params, "front_track", 170.0)
     rt  = _get_param_value(params, "rear_track", 155.0)
@@ -772,18 +803,35 @@ def create_wheels(root_comp, params, design, mono):
 
     # The stylised wheel section is symmetric in Y, so NO mirror is needed --
     # all four are pure translations (this also sidesteps the zero-transform
-    # MoveFeatures bug entirely, since occurrences don't use MoveFeatures).
+    # MoveFeatures bug, since occurrences don't use MoveFeatures).
     stations = [
         (fax,         +ft / 2.0, "Wheel_FR"),
         (fax,         -ft / 2.0, "Wheel_FL"),
         (rear_axle_x, +rt / 2.0, "Wheel_RR"),
         (rear_axle_x, -rt / 2.0, "Wheel_RL"),
     ]
-    wheel_occs = []
-    for x_cm, y_cm, name in stations:
+
+    def _xform(x_cm, y_cm):
         m = adsk.core.Matrix3D.create()
         m.translation = adsk.core.Vector3D.create(x_cm, y_cm, z)
-        oc = parent.occurrences.addExistingComponent(master, m)  # confirmed
+        return m
+
+    # Build the master wheel ONCE, placed DIRECTLY at the first station (not at
+    # the origin -- placing it at identity would leave a stray 5th wheel at the
+    # centreline). The other three are occurrences of the same master, so all
+    # four share one editable wheel section.
+    x0, y0, n0 = stations[0]
+    master_occ = parent.occurrences.addNewComponent(_xform(x0, y0))  # confirmed: addNewComponent(Matrix3D)
+    master = master_occ.component; master.name = "Wheel_master"
+    _build_one_wheel(master)
+    try:
+        master_occ.component.name = n0
+    except Exception:
+        pass
+
+    wheel_occs = [master_occ]
+    for x_cm, y_cm, name in stations[1:]:
+        oc = parent.occurrences.addExistingComponent(master, _xform(x_cm, y_cm))  # confirmed
         try:
             oc.component.name = name
         except Exception:
