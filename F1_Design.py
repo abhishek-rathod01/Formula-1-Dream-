@@ -937,16 +937,34 @@ def finalize(root_comp, design, all_dicts):
     ui = app.userInterface
     problems = []
     try:
+        HS = adsk.fusion.FeatureHealthStates
+        state_name = {
+            getattr(HS, "WarningFeatureHealthState", -1): "WARNING",
+            getattr(HS, "ErrorFeatureHealthState", -2): "ERROR",
+            getattr(HS, "SuppressedFeatureHealthState", -3): "suppressed",
+            getattr(HS, "RolledBackFeatureHealthState", -4): "rolled-back",
+        }
         timeline = design.timeline
         for i in range(timeline.count):
             try:
                 entity = timeline.item(i).entity
                 health = getattr(entity, "healthState", None)
                 if (health is not None and
-                        health != adsk.fusion.FeatureHealthStates.HealthyFeatureHealthState):
+                        health != HS.HealthyFeatureHealthState):
                     nm = getattr(entity, "name", "timeline[%d]" % i)
-                    msg = getattr(entity, "errorOrWarningMessage", "") or ""
-                    problems.append("%s: %s" % (nm, msg))
+                    # Owning component so a bare "Loft1" becomes "RearWing/Loft1".
+                    try:
+                        pc = getattr(entity, "parentComponent", None)
+                        if pc is not None and pc.name:
+                            nm = pc.name + "/" + nm
+                    except Exception:
+                        pass
+                    tag = state_name.get(health, "unhealthy")
+                    msg = (getattr(entity, "errorOrWarningMessage", "") or "")
+                    msg = " ".join(msg.split())          # collapse whitespace/newlines
+                    if len(msg) > 140:
+                        msg = msg[:140] + "..."
+                    problems.append("[%s] %s: %s" % (tag, nm, msg))
             except Exception:
                 continue
     except Exception:
