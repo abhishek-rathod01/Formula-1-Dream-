@@ -116,9 +116,10 @@ def create_parameters(design):
         return up.add(name, VI.createByString(expression), units, comment)
 
     p = {}
-    # --- monocoque ---
-    p["nose_length"]    = add("nose_length",    "600 mm",  "mm", "Nose cone length")
-    p["tub_length"]     = add("tub_length",     "2000 mm", "mm", "Survival-cell length")
+    # --- monocoque ---  (MCL39-like proportions: long body that runs the full
+    # length of the car so the rear wheels sit IN the bodywork, not behind it.)
+    p["nose_length"]    = add("nose_length",    "1000 mm", "mm", "Nose cone length (tip to front bulkhead)")
+    p["tub_length"]     = add("tub_length",     "3600 mm", "mm", "Body length: survival cell + engine + gearbox bay")
     p["tub_max_width"]  = add("tub_max_width",  "600 mm",  "mm", "Max tub width")
     p["tub_height"]     = add("tub_height",     "550 mm",  "mm", "Max tub height")
     p["nose_tip_width"] = add("nose_tip_width", "120 mm",  "mm", "Nose-tip ellipse width")
@@ -141,7 +142,7 @@ def create_parameters(design):
     p["rw_thickness"]       = add("rw_thickness",       "9 mm",    "mm", "RW foil thickness (mm scratch)")
     p["rw_camber"]          = add("rw_camber",          "5 mm",    "mm", "RW foil camber (mm scratch)")
     p["rw_height"]          = add("rw_height",          "350 mm",  "mm", "Wing Z above cover tail")
-    p["rw_overhang"]        = add("rw_overhang",        "150 mm",  "mm", "Wing X aft of cover rear")
+    p["rw_overhang"]        = add("rw_overhang",        "800 mm",  "mm", "Wing X aft of body rear (hangs behind rear axle)")
     p["drs_slot_gap_x"]     = add("drs_slot_gap_x",     "20 mm",   "mm", "DRS slot gap X")
     p["drs_slot_gap_z"]     = add("drs_slot_gap_z",     "35 mm",   "mm", "DRS slot gap Z")
     p["drs_flap_angle"]     = add("drs_flap_angle",     "28 deg",  "deg", "DRS flap angle (see angle note)")
@@ -150,7 +151,7 @@ def create_parameters(design):
     p["endplate_thickness"] = add("endplate_thickness", "10 mm",   "mm", "Endplate thickness (shared)")
     p["strut_diameter"]     = add("strut_diameter",     "40 mm",   "mm", "Swan-neck strut diameter")
     # --- front wing ---
-    p["fw_span"]              = add("fw_span",              "1800 mm", "mm", "Full front wing span")
+    p["fw_span"]              = add("fw_span",              "1900 mm", "mm", "Full front wing span (near max width)")
     p["fw_chord"]             = add("fw_chord",             "330 mm",  "mm", "Main plane chord")
     p["fw_flap_chord"]        = add("fw_flap_chord",        "220 mm",  "mm", "Flap chord")
     p["fw_thickness"]         = add("fw_thickness",         "0.10",    "",   "FW foil thickness fraction")
@@ -172,11 +173,11 @@ def create_parameters(design):
     p["tyre_outer_diameter"] = add("tyre_outer_diameter", "720 mm",  "mm", "Tyre outer diameter")
     p["wheel_rim_diameter"]  = add("wheel_rim_diameter",  "457 mm",  "mm", "Rim diameter (18 in)")
     p["tyre_width"]          = add("tyre_width",          "305 mm",  "mm", "Tyre width")
-    p["front_axle_x"]        = add("front_axle_x",        "300 mm",  "mm", "X of the front axle line")
+    p["front_axle_x"]        = add("front_axle_x",        "950 mm",  "mm", "X of the front axle line (nose overhangs ahead)")
     # --- sidepods ---
     p["sidepod_front_x"]      = add("sidepod_front_x",      "nose_length + tub_length * 0.45", "mm",
                                     "Intake-face X, expressed so it tracks the tub")
-    p["sidepod_length"]       = add("sidepod_length",       "900 mm", "mm", "Sidepod length")
+    p["sidepod_length"]       = add("sidepod_length",       "1400 mm", "mm", "Sidepod length")
     p["sidepod_height"]       = add("sidepod_height",       "200 mm", "mm", "Sidepod Z above floor")
     p["sidepod_inner_offset"] = add("sidepod_inner_offset", "50 mm",  "mm", "Gap between tub side and pod")
     p["sidepod_max_width"]    = add("sidepod_max_width",    "280 mm", "mm", "Sidepod max width")
@@ -561,25 +562,35 @@ def _make_y_axis_line(comp, x_cm, z_cm, tag):
     return ln
 
 
-def _apply_incidence(comp, body, qc_x, qc_z, angle_expr, axis_name):
+def _apply_incidence(comp, occ, body, qc_x, qc_z, angle_expr, axis_name):
     """Rotate `body` about a spanwise (+Y) axis through (qc_x, *, qc_z) by
     `angle_expr` -> LIVE angle of attack.
 
-    Axis is a SketchLine (parametric-safe), NOT a construction axis from a raw
-    InfiniteLine3D (which fails in parametric mode). Uses the current Move API
-    (createInput2 + defineAsRotate; old createInput is retired). Guarded: on any
-    failure the element is left flat and the skip is recorded rather than
-    aborting the wing. Sign follows the right-hand rule about +Y; if a wing
-    tilts the wrong way, negate the angle parameter.
+    Axis is a SketchLine (parametric-safe). The wing lives in a sub-component
+    placed via occurrence `occ`, so the Move feature runs in the ASSEMBLY
+    context: the body and axis must be converted with createForAssemblyContext
+    or defineAsRotate throws "Invalid entity" (confirmed: Autodesk forum). Uses
+    the current Move API (createInput2 + defineAsRotate; old createInput is
+    retired). Guarded: on any failure the element is left flat and the skip is
+    recorded rather than aborting the wing. Sign follows the right-hand rule
+    about +Y; if a wing tilts the wrong way, negate the angle parameter.
     """
     if not LIVE_ANGLES:
         return False
     try:
         axis_line = _make_y_axis_line(comp, qc_x, qc_z, axis_name)
-        ents = adsk.core.ObjectCollection.create(); ents.add(body)
+        # Convert native entities into the occurrence's assembly context so the
+        # Move feature accepts them (the "Invalid entity" fix).
+        try:
+            axis_ctx = axis_line.createForAssemblyContext(occ)
+            body_ctx = body.createForAssemblyContext(occ)
+        except Exception:
+            # Fallback: if proxies aren't needed/available, use natives.
+            axis_ctx, body_ctx = axis_line, body
+        ents = adsk.core.ObjectCollection.create(); ents.add(body_ctx)
         mf = comp.features.moveFeatures
         mi = mf.createInput2(ents)              # confirmed: createInput is retired -> createInput2
-        ok = mi.defineAsRotate(axis_line, adsk.core.ValueInput.createByString(angle_expr))  # confirmed
+        ok = mi.defineAsRotate(axis_ctx, adsk.core.ValueInput.createByString(angle_expr))  # confirmed
         if ok is False:
             raise RuntimeError("defineAsRotate returned False")
         feat = mf.add(mi)
@@ -623,7 +634,7 @@ def create_rear_wing(root_comp, params, design, mono, engine_cover):
         raise RuntimeError("RW mainplane: %s" % mp.errorOrWarningMessage)
     mp_body = mp.bodies.item(0); mp_body.name = "RW_mainplane"
     # LIVE AoA: tilt the mainplane about its quarter-chord spanwise (Y) axis.
-    _apply_incidence(comp, mp_body, x_wing + 0.25 * cr, z_wing,
+    _apply_incidence(comp, occ, mp_body, x_wing + 0.25 * cr, z_wing,
                      "rw_mainplane_angle", "RW_mp_AoA")
 
     gx = _get_param_value(params, "drs_slot_gap_x", 2.0); gz = _get_param_value(params, "drs_slot_gap_z", 3.5)
@@ -639,7 +650,7 @@ def create_rear_wing(root_comp, params, design, mono, engine_cover):
         raise RuntimeError("RW flap: %s" % fl.errorOrWarningMessage)
     fl_body = fl.bodies.item(0); fl_body.name = "RW_flap"
     # LIVE DRS: tilt the flap about its own quarter-chord spanwise axis.
-    _apply_incidence(comp, fl_body, fr_o.x + 0.25 * cr * 0.55, fr_o.y,
+    _apply_incidence(comp, occ, fl_body, fr_o.x + 0.25 * cr * 0.55, fr_o.y,
                      "drs_flap_angle", "RW_flap_AoA")
 
     # FULL SPAN: the loft above only spans 0..+span/2. Mirror the mainplane +
@@ -694,7 +705,7 @@ def create_front_wing(root_comp, params, design, mono, airfoil_section_fn):
     main_body = main_ext.bodies.item(0); main_body.name = "FW_mainplane"
     # LIVE AoA: tilt the main plane about its quarter-chord spanwise (Y) axis.
     # Done BEFORE the wing mirror so the mirrored (right) side inherits the tilt.
-    _apply_incidence(comp, main_body,
+    _apply_incidence(comp, occ, main_body,
                      x_off + 0.25 * chord_main, z_off, "fw_mainplane_angle", "FW_mp_AoA")
     flap_features = []; flap_bodies = []; prev_te = main_af["te_point"]
     for i in range(1, 4):
@@ -703,7 +714,7 @@ def create_front_wing(root_comp, params, design, mono, airfoil_section_fn):
         ext_i, af_i = _build_fw_element(comp, params, centre_plane, chord_flap, P(flap_le_x, flap_le_z, 0))
         fb = ext_i.bodies.item(0); fb.name = "FW_flap_%d" % i
         # Cumulative AoA: main plane angle + i flap steps (positions stay frozen).
-        _apply_incidence(comp, fb,
+        _apply_incidence(comp, occ, fb,
                          flap_le_x + 0.25 * chord_flap, flap_le_z,
                          "fw_mainplane_angle + %d*fw_flap_angle_step" % i, "FW_flap%d_AoA" % i)
         flap_features.append((ext_i, af_i)); flap_bodies.append(fb); prev_te = af_i["te_point"]
