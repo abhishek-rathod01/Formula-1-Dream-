@@ -490,16 +490,24 @@ def create_engine_cover(root_comp, params, design, mono, halo):
     planes = comp.constructionPlanes; sketches = comp.sketches; VI = adsk.core.ValueInput
     front_expr = "(%s) + airbox_halo_clearance" % halo["rear_extent_x"]
     tail_x_expr = "nose_length + tub_length - 100 mm"
+    # Span the cover's intermediate sections across the FULL front->tail length
+    # (as fractions), not a fixed cover_taper_length. Otherwise, when the body is
+    # long, S0..S3 bunch up at the front and the loft must bridge a huge gap to
+    # the tail -> LOFT_NO_TOOLBODY. Fractions keep the sections evenly spread.
+    span_expr = "((%s) - (%s))" % (tail_x_expr, front_expr)
 
     def offset_plane(x_expr, name):
         pin = planes.createInput()
         pin.setByOffset(comp.yZConstructionPlane, VI.createByString(x_expr))
         pl = planes.add(pin); pl.name = name; return pl
 
+    def at(frac):
+        return "(%s) + %s*%s" % (front_expr, span_expr, frac)
+
     plane = [offset_plane(front_expr, "EC_S0"),
-             offset_plane("(%s) + cover_taper_length*0.25" % front_expr, "EC_S1"),
-             offset_plane("(%s) + cover_taper_length*0.55" % front_expr, "EC_S2"),
-             offset_plane("(%s) + cover_taper_length*0.85" % front_expr, "EC_S3"),
+             offset_plane(at("0.22"), "EC_S1"),
+             offset_plane(at("0.48"), "EC_S2"),
+             offset_plane(at("0.80"), "EC_S3"),
              offset_plane(tail_x_expr, "EC_S4")]
     profiles = [None] * 5
     sk0 = sketches.add(plane[0]); sk0.name = "EC_S0"
@@ -880,11 +888,14 @@ def create_sidepods(root_comp, params, design, mono, engine_cover):
         pin.setByOffset(comp.yZConstructionPlane, VI.createByString(x_expr))
         pl = planes.add(pin); pl.name = name; return pl
 
-    # S3 rear exit references the monocoque rear-bulkhead station (short chain).
+    # Spread sidepod sections across the full front->rear-exit span (fractions),
+    # same reasoning as the engine cover: keeps the loft well-conditioned when
+    # the body is long instead of leaving a big gap before the rear-exit section.
     rear_exit_expr = "nose_length + tub_length - 200 mm"
+    sp_span = "((%s) - (%s))" % (rear_exit_expr, front)
     plane = [offset_plane(front, "SP_S0"),
-             offset_plane("(%s) + sidepod_length*0.35" % front, "SP_S1"),
-             offset_plane("(%s) + sidepod_length*0.75" % front, "SP_S2"),
+             offset_plane("(%s) + %s*0.35" % (front, sp_span), "SP_S1"),
+             offset_plane("(%s) + %s*0.70" % (front, sp_span), "SP_S2"),
              offset_plane(rear_exit_expr, "SP_S3")]
     curl = _get_param_value(params, "sidepod_curl_depth", 3.0)
     specs = [
