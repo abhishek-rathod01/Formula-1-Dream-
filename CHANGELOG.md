@@ -10,6 +10,7 @@ Coordinate convention: **X** longitudinal (nose tip at X=0, increasing rearward)
 ### Added
 - **Floor.** A flat underbody plate running from just behind the front wheels to just past the rear axle (~1040 mm wide, 40 mm ride height, 25 mm thick). New independent component.
 - **Suspension.** Double-wishbone arms at all four corners: an upper and a lower wishbone (each a fore + aft arm) reach from the body out to each wheel — the open-wheel look. Built as flat horizontal extrudes (planar sketch + extrude, robust in parametric mode); per-arm guarded so one bad arm can't lose the set.
+- **Diffuser.** Rear underbody ramp that climbs from floor level toward the exit behind the rear axle. Side profile sketched in X-Z and extruded symmetrically across the width (centred, no left/right ambiguity). Independent, guarded component.
 
 ### Fixed
 - **One clean car per run (idempotent rebuild).** `run()` now wipes all previously generated components before building, so re-running REPLACES the car instead of stacking duplicates (`EngineCover (1)`, `Halo (1)`, …). User parameters live on the design and survive, refreshed idempotently.
