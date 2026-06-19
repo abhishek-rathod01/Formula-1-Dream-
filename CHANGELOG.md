@@ -5,6 +5,25 @@ Coordinate convention: **X** longitudinal (nose tip at X=0, increasing rearward)
 
 ---
 
+## [Unreleased] — Feature-complete car: floor, suspension, one clean build per run
+
+### Added
+- **Floor.** A flat underbody plate running from just behind the front wheels to just past the rear axle (~1040 mm wide, 40 mm ride height, 25 mm thick). New independent component.
+- **Suspension.** Double-wishbone arms at all four corners: an upper and a lower wishbone (each a fore + aft arm) reach from the body out to each wheel — the open-wheel look. Built as flat horizontal extrudes (planar sketch + extrude, robust in parametric mode); per-arm guarded so one bad arm can't lose the set.
+
+### Fixed
+- **One clean car per run (idempotent rebuild).** `run()` now wipes all previously generated components before building, so re-running REPLACES the car instead of stacking duplicates (`EngineCover (1)`, `Halo (1)`, …). User parameters live on the design and survive, refreshed idempotently.
+- **Engine cover loft warning.** The fixed 3 cm section fillet was too large for the tapered tail section (Fusion flagged the loft yellow). Fillet reduced to 2 cm and the tail section made less degenerate, so the loft is healthy.
+
+### Changed
+- **Health sweep** now reports the owning component, the health state (WARNING/ERROR), and a trimmed message — e.g. `[WARNING] EngineCover/Loft1: …` instead of a bare `Loft1`.
+
+### Verification
+- `py_compile` + `pyflakes` clean; full mock-API run executes monocoque, front wing, sidepods, floor, and suspension end-to-end.
+- Floor and suspension are logic-verified but **pending first in-Fusion confirmation** (new geometry). Both are isolated and guarded — if either fails on a given build, the rest of the car still builds and the run report names the failure.
+
+---
+
 ## [Unreleased] — Fusion 2702 build fixes + live wing angles
 
 ### Fixed
