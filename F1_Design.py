@@ -985,6 +985,113 @@ def finalize(root_comp, design, all_dicts):
 # ===========================================================================
 # 12. RUN  (loud, dependency-ordered, per-component error isolation)
 # ===========================================================================
+# ===========================================================================
+# 9. FLOOR  (flat underbody plate -- the biggest single 'it's an F1 car' cue)
+# ===========================================================================
+def create_floor(root_comp, params, design):
+    """Flat underbody floor: a thin plate from just behind the front wheels to
+    just past the rear axle, low to the ground. Independent component (reads
+    only parameter VALUES, no geometry from other parts). Positions are read at
+    build time; the whole car rebuilds each run, so they always track the params.
+    """
+    occ = root_comp.occurrences.addNewComponent(adsk.core.Matrix3D.create())
+    comp = occ.component; comp.name = "Floor"
+    VI = adsk.core.ValueInput; P = adsk.core.Point3D.create
+    g = lambda k, d: _get_param_value(params, k, d)
+    fax = g("front_axle_x", 95.0); wb = g("wheelbase", 360.0)
+    front_x = fax + 22.0                 # just behind the front wheels
+    rear_x = fax + wb + 6.0              # to just past the rear axle
+    half_w = 52.0                        # ~1040 mm wide
+    pin = comp.constructionPlanes.createInput()
+    pin.setByOffset(comp.xYConstructionPlane, VI.createByString("40 mm"))  # ride height
+    pl = comp.constructionPlanes.add(pin); pl.name = "Floor_plane"
+    sk = comp.sketches.add(pl); sk.name = "Floor_sketch"
+    sk.sketchCurves.sketchLines.addTwoPointRectangle(
+        P(front_x, -half_w, 0), P(rear_x, half_w, 0))
+    prof = sk.profiles.item(0)
+    ext = comp.features.extrudeFeatures
+    ei = ext.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    ei.setDistanceExtent(False, VI.createByString("25 mm"))  # plate thickness
+    feat = ext.add(ei)
+    if _err(feat):
+        raise RuntimeError("Floor extrude: %s" % feat.errorOrWarningMessage)
+    body = feat.bodies.item(0); body.name = "Floor"
+    return {"component": comp, "body": body}
+
+
+# ===========================================================================
+# 10. SUSPENSION  (double-wishbone arms linking each wheel to the body)
+# ===========================================================================
+def _susp_arm(comp, z_cm, x1, y1, x2, y2, hw, thick_expr, name):
+    """One thin, flat suspension arm lying in a horizontal plane at height
+    z_cm, running from an inboard point (x1,y1) to an outboard point (x2,y2),
+    extruded `thick_expr` upward. A planar sketch + extrude -> robust in
+    parametric mode (no 3D-sketch / construction-axis pitfalls)."""
+    import math
+    VI = adsk.core.ValueInput; P = adsk.core.Point3D.create
+    pin = comp.constructionPlanes.createInput()
+    pin.setByOffset(comp.xYConstructionPlane, VI.createByString("%.4f cm" % z_cm))
+    pl = comp.constructionPlanes.add(pin); pl.name = name + "_pl"
+    sk = comp.sketches.add(pl); sk.name = name + "_sk"
+    dx, dy = x2 - x1, y2 - y1
+    L = math.hypot(dx, dy) or 1.0
+    px, py = -dy / L * hw, dx / L * hw     # in-plane perpendicular * half-width
+    a = P(x1 + px, y1 + py, 0); b = P(x2 + px, y2 + py, 0)
+    c = P(x2 - px, y2 - py, 0); d = P(x1 - px, y1 - py, 0)
+    lines = sk.sketchCurves.sketchLines
+    lines.addByTwoPoints(a, b); lines.addByTwoPoints(b, c)
+    lines.addByTwoPoints(c, d); lines.addByTwoPoints(d, a)
+    prof = sk.profiles.item(0)
+    ext = comp.features.extrudeFeatures
+    ei = ext.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    ei.setDistanceExtent(False, VI.createByString(thick_expr))
+    feat = ext.add(ei)
+    if _err(feat):
+        raise RuntimeError("arm %s: %s" % (name, feat.errorOrWarningMessage))
+    return feat.bodies.item(0)
+
+
+def create_suspension(root_comp, params, design):
+    """Double-wishbone suspension: at each of the four corners, an upper and a
+    lower wishbone (each a fore + aft arm) reach from the body out to the wheel
+    -- the open-wheel 'arms to the tyres' look. Per-arm guarded so one bad arm
+    can't lose the whole set. Independent component."""
+    occ = root_comp.occurrences.addNewComponent(adsk.core.Matrix3D.create())
+    comp = occ.component; comp.name = "Suspension"
+    g = lambda k, d: _get_param_value(params, k, d)
+    fax = g("front_axle_x", 95.0); wb = g("wheelbase", 360.0)
+    ft = g("front_track", 170.0); rt = g("rear_track", 155.0)
+    hub_z = g("tyre_outer_diameter", 72.0) / 2.0
+    tw = g("tyre_width", 30.5)
+    body_half = g("tub_max_width", 60.0) / 2.0 * 0.85     # inboard attach near the body side
+    corners = [(fax, +ft / 2.0), (fax, -ft / 2.0),
+               (fax + wb, +rt / 2.0), (fax + wb, -rt / 2.0)]
+    spread = 16.0          # fore/aft separation of the inboard pivots (cm)
+    up_z = hub_z + 6.0     # upper wishbone height
+    lo_z = hub_z - 6.0     # lower wishbone height
+    hw = 1.6               # arm half-width (cm) -> ~32 mm arms
+    thick = "30 mm"
+    bodies = []
+    skips = []
+    n = 0
+    for (ax, yo) in corners:
+        s = 1.0 if yo > 0 else -1.0
+        y_in = s * body_half                       # inboard (body side)
+        y_out = yo - s * (tw / 2.0 + 1.0)          # outboard, just inside the wheel inner face
+        plan = [(up_z, ax - spread, "UWB_f"), (up_z, ax + spread, "UWB_a"),
+                (lo_z, ax - spread, "LWB_f"), (lo_z, ax + spread, "LWB_a")]
+        for (z, x_in, tag) in plan:
+            nm = "%s%d" % (tag, n)
+            try:
+                bodies.append(_susp_arm(comp, z, x_in, y_in, ax, y_out, hw, thick, nm))
+            except Exception as exc:
+                skips.append("%s: %s" % (nm, exc))
+        n += 1
+    if not bodies:
+        raise RuntimeError("Suspension: no arms built (%s)" % "; ".join(skips))
+    return {"component": comp, "bodies": bodies, "skipped": skips}
+
+
 def _clear_previous(root):
     """Delete all top-level occurrences so each run rebuilds ONE clean car
     instead of stacking duplicates (EngineCover, EngineCover (1), ...).
@@ -1123,6 +1230,8 @@ def run(context):
             ("front_wing", lambda: create_front_wing(root, params, design, mono, airfoil_section)),
             ("wheels",     lambda: create_wheels(root, params, design, mono)),
             ("sidepods",   lambda: create_sidepods(root, params, design, mono, ec)),
+            ("floor",      lambda: create_floor(root, params, design)),
+            ("suspension", lambda: create_suspension(root, params, design)),
         ):
             if not want(name):
                 continue
