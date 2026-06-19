@@ -1092,6 +1092,42 @@ def create_suspension(root_comp, params, design):
     return {"component": comp, "bodies": bodies, "skipped": skips}
 
 
+# ===========================================================================
+# 11. DIFFUSER  (rear underbody ramp -- rises toward the back, F1 signature)
+# ===========================================================================
+def create_diffuser(root_comp, params, design):
+    """Rear diffuser: a ramped plate under the back of the car that climbs from
+    floor level up toward the rear exit. Side profile sketched in X-Z on the
+    centre (XZ) plane, then extruded symmetrically across the width -> centred,
+    no left/right direction ambiguity. Independent, guarded component."""
+    occ = root_comp.occurrences.addNewComponent(adsk.core.Matrix3D.create())
+    comp = occ.component; comp.name = "Diffuser"
+    VI = adsk.core.ValueInput; P = adsk.core.Point3D.create
+    g = lambda k, d: _get_param_value(params, k, d)
+    rax = g("front_axle_x", 95.0) + g("wheelbase", 360.0)   # rear axle X
+    x0 = rax - 35.0       # ramp starts ~35 cm ahead of the rear axle
+    x1 = rax + 45.0       # exits ~45 cm behind it
+    z0 = 4.0              # floor underside / ride height
+    rise = 16.0           # how high the underside climbs to the exit
+    pth = 3.0             # plate thickness
+    half_w = 48.0         # ~960 mm wide (symmetric extrude -> centred)
+    sk = comp.sketches.add(comp.xZConstructionPlane); sk.name = "Diff_sketch"
+    L = sk.sketchCurves.sketchLines
+    a = P(x0, z0, 0); b = P(x1, z0 + rise, 0)
+    c = P(x1, z0 + rise + pth, 0); d = P(x0, z0 + pth, 0)   # (a=X, b=Z)
+    L.addByTwoPoints(a, b); L.addByTwoPoints(b, c)
+    L.addByTwoPoints(c, d); L.addByTwoPoints(d, a)
+    prof = sk.profiles.item(0)
+    ext = comp.features.extrudeFeatures
+    ei = ext.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    ei.setDistanceExtent(True, VI.createByString("%.4f cm" % half_w))   # symmetric -> full width centred
+    feat = ext.add(ei)
+    if _err(feat):
+        raise RuntimeError("Diffuser extrude: %s" % feat.errorOrWarningMessage)
+    body = feat.bodies.item(0); body.name = "Diffuser"
+    return {"component": comp, "body": body}
+
+
 def _clear_previous(root):
     """Delete all top-level occurrences so each run rebuilds ONE clean car
     instead of stacking duplicates (EngineCover, EngineCover (1), ...).
@@ -1232,6 +1268,7 @@ def run(context):
             ("sidepods",   lambda: create_sidepods(root, params, design, mono, ec)),
             ("floor",      lambda: create_floor(root, params, design)),
             ("suspension", lambda: create_suspension(root, params, design)),
+            ("diffuser",   lambda: create_diffuser(root, params, design)),
         ):
             if not want(name):
                 continue
