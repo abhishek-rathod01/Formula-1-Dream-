@@ -44,6 +44,7 @@ specific Fusion modelling technique:
 | **Sidepods** | Sculpted side bodywork with undercut | Twin **Loft** (mirrored), sections spaced as fractions of body length |
 | **Floor** | Flat underbody plate | Single thin **Extrude** of a rectangle on an offset XY plane |
 | **Suspension** | Double-wishbone arms at all 4 corners | 16 thin planar **Extrudes** forming upper + lower wishbones (fore + aft arms) |
+| **Diffuser** | Rear underbody ramp | Side profile **Extruded** symmetrically across the width (centred) |
 | *airfoil_section* | NACA-style profile generator | Fitted-spline helper used by both wings |
 | *finalize()* | Post-build health check | Timeline sweep reporting any unhealthy feature by component + state |
 
@@ -64,7 +65,7 @@ components** (one failure doesn't lose the whole car), and a loud summary dialog
 - **One clean car per run** — re-running replaces the car instead of stacking duplicates.
 
 **Added and logic-verified, pending first in-Fusion confirmation:**
-- **Floor** and **suspension** (compile + lint + mock-API run all pass; first real-Fusion run is the next check).
+- **Floor**, **suspension**, and **rear diffuser** (compile + lint + mock-API run all pass; first real-Fusion run is the next check).
 - Engine cover loft fillet/taper fix (to clear a health-sweep warning) and the upgraded health sweep.
 
 ---
@@ -133,10 +134,10 @@ Version-specific fixes that were required to make the script run on 2702:
   branded surfaces.
 
 **Next steps (polish, not missing parts):**
-- Rear **diffuser** (floor kicking up at the back).
 - Suspension **pushrods** (the diagonal link).
 - Raised, narrower **nose** and a lower overall **stance**.
 - Coke-bottle sidepod refinement toward the MCL39 profile.
+- Diffuser **strakes** (the vertical fins).
 
 ---
 
