@@ -481,7 +481,7 @@ def _draw_intake_profile(sketch, w_expr, h_expr):
 
 
 def _draw_cover_section(sketch, w_expr, h_expr):
-    return _draw_eight_curve_box(sketch, w_expr, h_expr, 3.0, 3.0)
+    return _draw_eight_curve_box(sketch, w_expr, h_expr, 2.0, 2.0)   # smaller fillet fits small tail sections
 
 
 def create_engine_cover(root_comp, params, design, mono, halo):
@@ -515,7 +515,7 @@ def create_engine_cover(root_comp, params, design, mono, halo):
     for idx, hw_e, hh_e in [(1, "airbox_cover_max_width*0.75/2", "airbox_cover_max_height*0.80/2"),
                             (2, "airbox_cover_max_width/2",      "airbox_cover_max_height/2"),
                             (3, "airbox_cover_max_width*0.55/2", "airbox_cover_max_height*0.45/2"),
-                            (4, "airbox_cover_max_width*0.18/2", "airbox_cover_max_height*0.15/2")]:
+                            (4, "airbox_cover_max_width*0.28/2", "airbox_cover_max_height*0.22/2")]:
         sk = sketches.add(plane[idx]); sk.name = "EC_S%d" % idx
         profiles[idx] = _draw_cover_section(sk, hw_e, hh_e)
     lf = comp.features.loftFeatures
@@ -528,7 +528,7 @@ def create_engine_cover(root_comp, params, design, mono, halo):
         raise RuntimeError("Engine cover loft: %s" % loft.errorOrWarningMessage)
     body = loft.bodies.item(0); body.name = "EngineCover"
     return {"component": comp, "body": body, "rear_plane": mono["rear_plane"],
-            "tail_top_z": "airbox_cover_max_height*0.15/2", "rear_station_x": tail_x_expr}
+            "tail_top_z": "airbox_cover_max_height*0.22/2", "rear_station_x": tail_x_expr}
 
 
 # ===========================================================================
@@ -985,6 +985,46 @@ def finalize(root_comp, design, all_dicts):
 # ===========================================================================
 # 12. RUN  (loud, dependency-ordered, per-component error isolation)
 # ===========================================================================
+def _clear_previous(root):
+    """Delete all top-level occurrences so each run rebuilds ONE clean car
+    instead of stacking duplicates (EngineCover, EngineCover (1), ...).
+
+    Every component this script makes is a top-level occurrence of the root
+    (create_* all call root.occurrences.addNewComponent), and the wheel instances
+    are nested under the Wheels occurrence -- so deleting the top-level
+    occurrences clears the whole car. User parameters live on the design, not a
+    component, so they survive and are refreshed idempotently by
+    create_parameters (the count stays stable, e.g. 58, instead of growing).
+
+    A snapshot list is taken first because deleteMe() mutates the collection;
+    holding object references lets us delete each safely. Fully guarded: a delete
+    that fails is skipped rather than aborting the rebuild.
+    """
+    removed = 0
+    try:
+        occ_list = [root.occurrences.item(i) for i in range(root.occurrences.count)]
+    except Exception:
+        occ_list = []
+    for occ in occ_list:
+        try:
+            occ.deleteMe(); removed += 1
+        except Exception:
+            pass
+    # Defensive: clear any stray root-level geometry left by an older/aborted run
+    # (normally none -- all geometry lives in sub-components).
+    for coll_name in ("bRepBodies", "sketches", "constructionPlanes", "constructionAxes"):
+        try:
+            coll = getattr(root, coll_name)
+            for item in [coll.item(i) for i in range(coll.count)]:
+                try:
+                    item.deleteMe()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    return removed
+
+
 def run(context):
     # ISOLATION: build one component at a time for first-run debugging.
     #   "all" | "monocoque" | "halo" | "engine_cover" | "rear_wing" |
@@ -995,6 +1035,12 @@ def run(context):
     # continues (so one bad wing doesn't lose the whole car). Dependencies
     # (monocoque, and halo->cover->rear_wing) still abort their dependents.
     CONTINUE_ON_INDEPENDENT_FAILURE = True
+
+    # If True, wipe any previously generated car at the start of each run so a
+    # re-run REPLACES the car instead of stacking a duplicate on top of it
+    # (which is what produced EngineCover (1), Halo (1), ... and the doubled
+    # health warnings). Turn off only if you want to keep prior runs in the doc.
+    CLEAR_PREVIOUS = True
 
     ui = None
     progress = []
@@ -1014,9 +1060,13 @@ def run(context):
             return
         progress.append("design OK")
 
+        root = design.rootComponent
+        if CLEAR_PREVIOUS:
+            n = _clear_previous(root)
+            progress.append("cleared previous (%d component(s) removed)" % n)
+
         params = create_parameters(design)
         progress.append("parameters OK (%d defined)" % design.userParameters.count)
-        root = design.rootComponent
 
         def want(name):
             return BUILD_ONLY in ("all", name)
