@@ -5,6 +5,13 @@ Coordinate convention: **X** longitudinal (nose tip at X=0, increasing rearward)
 
 ---
 
+## [Unreleased] — Suspension pushrods
+
+### Added
+- **Pushrods.** A diagonal strut at each of the four corners, from the lower‑outboard point (near the wheel, low) up to an inboard‑high rocker point on the chassis — the characteristic F1 pushrod. Built in a transverse plane and extruded symmetrically across X (centred, no direction ambiguity); per‑element guarded alongside the wishbones. Logic‑verified (compile + lint + mock); pending first in‑Fusion run.
+
+---
+
 ## [Unreleased] — Feature-complete car: floor, suspension, one clean build per run
 
 ### Added
