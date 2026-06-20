@@ -43,7 +43,7 @@ specific Fusion modelling technique:
 | **Wheels** | Four tyres at the corners | One **revolved** master section (about a sketch-line axis) **instanced** to four corners via Occurrences |
 | **Sidepods** | Sculpted side bodywork with undercut | Twin **Loft** (mirrored), sections spaced as fractions of body length |
 | **Floor** | Flat underbody plate | Single thin **Extrude** of a rectangle on an offset XY plane |
-| **Suspension** | Double-wishbone arms at all 4 corners | 16 thin planar **Extrudes** forming upper + lower wishbones (fore + aft arms) |
+| **Suspension** | Double-wishbone arms + pushrod at all 4 corners | 20 thin planar **Extrudes**: upper + lower wishbones (fore + aft arms) and a transverse pushrod |
 | **Diffuser** | Rear underbody ramp | Side profile **Extruded** symmetrically across the width (centred) |
 | *airfoil_section* | NACA-style profile generator | Fitted-spline helper used by both wings |
 | *finalize()* | Post-build health check | Timeline sweep reporting any unhealthy feature by component + state |
@@ -134,7 +134,6 @@ Version-specific fixes that were required to make the script run on 2702:
   branded surfaces.
 
 **Next steps (polish, not missing parts):**
-- Suspension **pushrods** (the diagonal link).
 - Raised, narrower **nose** and a lower overall **stance**.
 - Coke-bottle sidepod refinement toward the MCL39 profile.
 - Diffuser **strakes** (the vertical fins).
