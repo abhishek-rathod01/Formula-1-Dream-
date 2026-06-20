@@ -1051,11 +1051,41 @@ def _susp_arm(comp, z_cm, x1, y1, x2, y2, hw, thick_expr, name):
     return feat.bodies.item(0)
 
 
+def _susp_strut(comp, x_cm, ya, za, yb, zb, hw, thick_cm, name):
+    """One thin strut (a pushrod) lying in a TRANSVERSE plane at X = x_cm,
+    running from (ya, za) to (yb, zb) in Y-Z (a=Y, b=Z, the same convention the
+    monocoque cross-sections use), extruded SYMMETRICALLY across X so it is
+    centred on the plane -> no +X/-X direction ambiguity. Planar sketch +
+    extrude, so it stays robust in parametric mode."""
+    import math
+    VI = adsk.core.ValueInput; P = adsk.core.Point3D.create
+    pin = comp.constructionPlanes.createInput()
+    pin.setByOffset(comp.yZConstructionPlane, VI.createByString("%.4f cm" % x_cm))
+    pl = comp.constructionPlanes.add(pin); pl.name = name + "_pl"
+    sk = comp.sketches.add(pl); sk.name = name + "_sk"
+    dy, dz = yb - ya, zb - za
+    L = math.hypot(dy, dz) or 1.0
+    py, pz = -dz / L * hw, dy / L * hw          # in-plane perpendicular * half-width
+    a = P(ya + py, za + pz, 0); b = P(yb + py, zb + pz, 0)
+    c = P(yb - py, zb - pz, 0); d = P(ya - py, za - pz, 0)
+    lines = sk.sketchCurves.sketchLines
+    lines.addByTwoPoints(a, b); lines.addByTwoPoints(b, c)
+    lines.addByTwoPoints(c, d); lines.addByTwoPoints(d, a)
+    prof = sk.profiles.item(0)
+    ext = comp.features.extrudeFeatures
+    ei = ext.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    ei.setDistanceExtent(True, VI.createByString("%.4f cm" % (thick_cm / 2.0)))   # symmetric -> centred
+    feat = ext.add(ei)
+    if _err(feat):
+        raise RuntimeError("strut %s: %s" % (name, feat.errorOrWarningMessage))
+    return feat.bodies.item(0)
+
+
 def create_suspension(root_comp, params, design):
     """Double-wishbone suspension: at each of the four corners, an upper and a
-    lower wishbone (each a fore + aft arm) reach from the body out to the wheel
-    -- the open-wheel 'arms to the tyres' look. Per-arm guarded so one bad arm
-    can't lose the whole set. Independent component."""
+    lower wishbone (each a fore + aft arm) plus a pushrod reach from the body out
+    to the wheel -- the open-wheel 'arms to the tyres' look. Per-element guarded
+    so one bad element can't lose the whole set. Independent component."""
     occ = root_comp.occurrences.addNewComponent(adsk.core.Matrix3D.create())
     comp = occ.component; comp.name = "Suspension"
     g = lambda k, d: _get_param_value(params, k, d)
@@ -1086,6 +1116,13 @@ def create_suspension(root_comp, params, design):
                 bodies.append(_susp_arm(comp, z, x_in, y_in, ax, y_out, hw, thick, nm))
             except Exception as exc:
                 skips.append("%s: %s" % (nm, exc))
+        # pushrod: from the lower-outboard corner (near the wheel, low) up to an
+        # inboard-high rocker point on the chassis -> the diagonal F1 strut.
+        prnm = "PR%d" % n
+        try:
+            bodies.append(_susp_strut(comp, ax, y_out, lo_z, y_in, up_z + 8.0, 1.2, 2.4, prnm))
+        except Exception as exc:
+            skips.append("%s: %s" % (prnm, exc))
         n += 1
     if not bodies:
         raise RuntimeError("Suspension: no arms built (%s)" % "; ".join(skips))
